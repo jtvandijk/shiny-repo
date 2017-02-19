@@ -1,0 +1,153 @@
+---
+title: "Mortality in South Africa"
+runtime: shiny
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+    source_code: embed
+---
+
+```{r setup, include=FALSE}
+
+#Prepare the data
+
+library(flexdashboard)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(southafricastats)
+library(shiny)
+library(leaflet)
+library(DT)
+
+totals <- population_zaf %>%
+  filter(year == 2013) %>%
+  select(province, total)
+
+compare_provinces <- mortality_zaf %>%
+  left_join(totals) %>%
+  mutate(rate = deaths / total * 1e3) %>%
+  group_by(province, indicator) %>%
+  summarise(rate = mean(rate)) %>%
+  ungroup %>%
+  left_join(totals) %>%
+  spread(indicator, rate)
+
+mortality_zaf <- mortality_zaf %>%
+  filter(indicator != "All causes")
+
+```
+
+Column {.sidebar}
+=====================================================================
+
+This app explores mortality data from the 
+[South Africa Data Portal](http://southafrica.opendataforafrica.org/).
+
+Use the input below to select a cause of death to explore.
+
+```{r}
+
+selectInput(inputId = "indicator",
+            label = "Cause of death:",
+            choices = unique(mortality_zaf$indicator),
+            selected = "Tuberculosis (A15-A19)")
+
+```
+
+Map {data-icon="fa-map-marker"}
+=====================================================================
+
+
+### Where is the mortality rate highest?
+
+```{r}
+
+selected_df <- reactive({
+    subset_df <- compare_provinces[, c(1,
+                        which(colnames(compare_provinces) == input$indicator))]
+    colnames(subset_df) <- c("province", "indicator")
+    population_zaf %>%
+        filter(year == 2013) %>%
+        left_join(subset_df, by = "province") %>%
+        mutate(indicator = indicator / sum(indicator, na.rm = TRUE))
+})
+
+renderLeaflet({
+  leaflet(selected_df()) %>%
+    addProviderTiles("CartoDB.Positron") %>%
+    addCircles(lng = ~longitude,
+               lat = ~latitude,
+               radius = ~sqrt(indicator) * 3e5,
+               weight = 2.5,
+               popup = ~province,
+               color = "magenta")
+})
+
+```
+
+Comparing provinces {data-icon="fa-list"}
+=====================================================================
+
+
+### How does the selected mortality rate compare to the overall mortality rate?
+
+```{r}
+
+scatterplot_df <- reactive({
+    subset_df <- compare_provinces[, c(1:2, 
+                                       which(colnames(compare_provinces) == "All causes"),
+                                       which(colnames(compare_provinces) == input$indicator))]
+    colnames(subset_df) <- c("province", "total", "selected_x", "selected_y")
+    subset_df
+})
+
+renderPlot({
+    ggplot(scatterplot_df(), aes(x = selected_x,
+                                 y = selected_y,
+                                 size = total,
+                                 label = province)) +
+        geom_point(alpha = 0.7, color = "magenta4") +
+        theme_minimal() +
+        labs(x = "All causes", y = input$indicator) +
+        geom_text(aes(size = 1e7), vjust = 2) +
+        scale_x_continuous(limits = c(7.7, 14.2)) +
+        theme_minimal(base_size = 14) +
+        theme(legend.position="none")
+  
+})
+```
+
+Changes in time {data-icon="fa-area-chart"}
+====================================================================
+
+### How have the number of deaths changed in time?
+
+```{r}
+
+renderPlot({
+  mortality_zaf %>%
+    filter(indicator == input$indicator) %>%
+    ggplot(aes(year, deaths, color = province)) +
+    geom_line(alpha = 0.8, size = 1.5) +
+    theme_minimal(base_size = 18) +
+    labs(x = NULL, y = "Number of deaths")
+})
+
+```
+
+Table {data-icon="fa-table"}
+====================================================================
+
+### Explore the data as reported by the South Africa Data Portal
+
+```{r}
+
+renderDataTable({
+  datatable( mortality_zaf %>%
+    filter(indicator == input$indicator))
+})
+
+```
+
